@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OCR Paste — Fase 1</title>
+      <!-- Tambahkan OpenCV.js -->
+ 
+  </head>
+  <body>
+    <main>
+      <h1>OCR dari Clipboard</h1>
+      <p><em>Privasi: gambar tidak dikirim ke server mana pun.</em></p>
+
+      <fieldset>
+        <legend>Pilih Mode</legend>
+        <label>
+          <input type="radio" name="mode" value="text" checked />
+          Teks
+        </label>
+        <label>
+          <input type="radio" name="mode" value="table" />
+          Tabel
+        </label>
+      </fieldset>
+
+      <div
+        id="paste-area"
+        style="border: 2px dashed #aaa; padding: 20px; min-height: 120px; margin: 16px 0;"
+      >
+        <p>Tempelkan screenshot di sini (Ctrl+V) atau gunakan tombol di bawah</p>
+        <img id="preview" style="max-width: 100%; display: none; margin-top: 10px" alt="Preview" />
+      </div>
+
+      <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+        <button id="paste-btn">📋 Paste dari Clipboard</button>
+        <span>ATAU</span>
+        <input type="file" id="file-input" accept="image/*" />
+      </div>
+
+      <div style="margin-bottom: 15px;">
+        <label for="lang-select" style="font-weight: bold;">Bahasa OCR: </label>
+        <select id="lang-select" style="padding: 5px; font-size: 14px;">
+          <option value="ind+eng">Campuran (Indonesia + Inggris)</option>
+          <option value="ind">Indonesia</option>
+          <option value="eng">Inggris (English)</option>
+        </select>
+      </div>
+
+      <button
+        id="process-btn"
+        style="padding: 10px 20px; font-size: 16px; font-weight: bold; cursor: pointer;"
+      >
+        Proses OCR
+      </button>
+
+      <p id="status" style="font-weight: bold; color: #0066cc; margin-top: 15px;">
+        Tempelkan gambar atau pilih file untuk memulai.
+      </p>
+
+      <!-- HASIL TEKS -->
+      <div id="result-container" style="display: none; margin-top: 20px;">
+        <h2>Hasil Teks</h2>
+        <textarea
+          id="result-text"
+          rows="12"
+          style="width: 100%; padding: 10px; font-family: monospace; box-sizing: border-box;"
+          placeholder="Teks hasil OCR akan muncul di sini..."
+        ></textarea>
+        <br />
+        <button id="copy-btn" style="margin-top: 10px; padding: 8px 15px; cursor: pointer;">Copy Teks</button>
+      </div>
+
+      <!-- HASIL TABEL (Dipindah keluar dari result-container) -->
+      <div id="table-result-container" style="display: none; margin-top: 20px; overflow-x: auto;">
+        <h2>Hasil Tabel</h2>
+        <table id="result-table" border="1" style="border-collapse: collapse; width: 100%; text-align: left;">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <br />
+        <!-- Cari baris ini -->
+        <button id="download-csv-btn" style="padding: 8px 15px; cursor: pointer;">Download CSV</button>
+        
+        <!-- Tambahkan kode ini di bawahnya -->
+        <button id="copy-table-btn" style="padding: 8px 15px; cursor: pointer; margin-left: 10px; background-color: #e0f7fa;">Copy Tabel (Untuk Excel)</button>
+      </div>
+
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
