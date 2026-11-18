@@ -1,6 +1,7 @@
 import { createWorker } from 'tesseract.js';
 import type { OcrInput, OcrPipeline, TableResult } from '../types';
 
+// FUNGSI 1: Menghapus garis dengan Threshold yang lebih pintar
 function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
   const ctx = canvas.getContext('2d')!;
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -12,19 +13,19 @@ function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i], g = data[i+1], b = data[i+2];
     const gray = 0.299*r + 0.587*g + 0.114*b;
-    binary[i/4] = gray < 150 ? 1 : 0; 
+    // UPGRADE: Naikkan threshold ke 200 agar garis tipis/abu-abu ikut terdeteksi
+    binary[i/4] = gray < 200 ? 1 : 0; 
   }
 
   const toDelete = new Uint8Array(width * height);
-  const minLineLength = 30; 
+  const minLineLength = 25; // Sedikit lebih pendek untuk garis tipis
 
-  // Garis Horizontal
+  // Deteksi Garis Horizontal
   for (let y = 0; y < height; y++) {
     let count = 0;
     for (let x = 0; x < width; x++) {
-      if (binary[y * width + x] === 1) {
-        count++;
-      } else {
+      if (binary[y * width + x] === 1) count++;
+      else {
         if (count > minLineLength) {
           for (let k = 1; k <= count; k++) toDelete[y * width + (x - k)] = 1;
         }
@@ -36,14 +37,13 @@ function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
     }
   }
 
-  // Garis Vertikal
+  // Deteksi Garis Vertikal
   const verticalLineXs: number[] = [];
   for (let x = 0; x < width; x++) {
     let count = 0;
     for (let y = 0; y < height; y++) {
-      if (binary[y * width + x] === 1) {
-        count++;
-      } else {
+      if (binary[y * width + x] === 1) count++;
+      else {
         if (count > minLineLength) {
           for (let k = 1; k <= count; k++) toDelete[(y - k) * width + x] = 1;
           verticalLineXs.push(x);
@@ -57,6 +57,7 @@ function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
     }
   }
 
+  // Hapus garis dan ubah background jadi putih bersih
   for (let i = 0; i < width * height; i++) {
     if (toDelete[i] === 1) {
       const p = i * 4;
@@ -90,7 +91,8 @@ export const tablePipeline: OcrPipeline = {
     const canvas = document.createElement('canvas');
     canvas.width = image.width;
     canvas.height = image.height;
-    canvas.getContext('2d')!.drawImage(image, 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
 
     const verticalLines = removeLinesFromCanvas(canvas);
     onProgress(30);
@@ -99,9 +101,14 @@ export const tablePipeline: OcrPipeline = {
       langPath: 'https://tessdata.projectnaptha.com/4.0.0',
     });
 
+    // UPGRADE 2: Matikan kamus (dawg) dan set whitelist
     await worker.setParameters({
       tessedit_pageseg_mode: '6', 
       preserve_interword_spaces: '1',
+      load_system_dawg: '0',   // Matikan kamus bahasa
+      load_freq_dawg: '0',     // Matikan frekuensi kata
+      // Hanya izinkan Huruf Kapital, Angka, dan beberapa simbol umum
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,$ ' 
     });
 
     const cleanedBlob = await new Promise<Blob>((resolve) => {
@@ -120,7 +127,6 @@ export const tablePipeline: OcrPipeline = {
               for (const line of paragraph.lines) {
                 if (line.words) {
                   for (const word of line.words) {
-                    // PENGAMAN: Pastikan word punya teks dan bbox
                     if (word.text.trim().length > 0 && word.bbox) {
                       allWords.push(word);
                     }
@@ -141,10 +147,8 @@ export const tablePipeline: OcrPipeline = {
 
     let rows: string[][] = [];
 
-    // JIKA KITA MENEMUKAN GARIS VERTIKAL (Metode Presisi)
     if (verticalLines.length >= 2) {
         const colBounds = [0, ...verticalLines, image.width];
-        
         let currentRow: string[] = new Array(colBounds.length - 1).fill("");
         let currentY = -1;
 
@@ -165,16 +169,13 @@ export const tablePipeline: OcrPipeline = {
                     break;
                 }
             }
-            
-            // Jika kata jatuh di luar batas garis, masukkan ke kolom terakhir
             if (!assigned && currentRow.length > 0) {
                 currentRow[currentRow.length - 1] += " " + word.text;
             }
         }
         if (currentY !== -1) rows.push(currentRow);
-
     } else {
-        // FALLBACK (Jika gambar tidak punya garis vertikal)
+        // Fallback
         let currentRow: { text: string, x0: number, x1: number }[] = [];
         let currentY = -1;
 
