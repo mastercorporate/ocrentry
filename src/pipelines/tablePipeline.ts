@@ -1,24 +1,36 @@
 import { createWorker } from 'tesseract.js';
 import type { OcrInput, OcrPipeline, TableResult } from '../types';
 
-// FUNGSI 1: Menghapus garis dengan Threshold yang lebih pintar
-function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
+function preprocessAndRemoveLines(canvas: HTMLCanvasElement): number[] {
   const ctx = canvas.getContext('2d')!;
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imgData.data;
   const width = canvas.width;
   const height = canvas.height;
   
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const data = imgData.data;
+  
   const binary = new Uint8Array(width * height);
+  
+  // 1. Grayscale, Kontras Tinggi (Binarization), dan Deteksi Garis
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i], g = data[i+1], b = data[i+2];
-    const gray = 0.299*r + 0.587*g + 0.114*b;
-    // UPGRADE: Naikkan threshold ke 200 agar garis tipis/abu-abu ikut terdeteksi
-    binary[i/4] = gray < 200 ? 1 : 0; 
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    // UPGRADE: Binarization Ekstrem
+    // Jika pixel lebih gelap dari 180, jadikan Hitam Pekat. Jika terang, jadikan Putih Bersih.
+    // Ini sangat bagus untuk menghilangkan noise dan mempertegas teks.
+    const isDark = gray < 180;
+    
+    data[i] = isDark ? 0 : 255;
+    data[i+1] = isDark ? 0 : 255;
+    data[i+2] = isDark ? 0 : 255;
+    
+    binary[i/4] = isDark ? 1 : 0; 
   }
 
   const toDelete = new Uint8Array(width * height);
-  const minLineLength = 25; // Sedikit lebih pendek untuk garis tipis
+  // Karena gambar sudah diperbesar 2.5x, panjang garis minimal juga harus disesuaikan
+  const minLineLength = 50; 
 
   // Deteksi Garis Horizontal
   for (let y = 0; y < height; y++) {
@@ -57,7 +69,7 @@ function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
     }
   }
 
-  // Hapus garis dan ubah background jadi putih bersih
+  // Hapus garis menjadi putih bersih
   for (let i = 0; i < width * height; i++) {
     if (toDelete[i] === 1) {
       const p = i * 4;
@@ -70,9 +82,9 @@ function removeLinesFromCanvas(canvas: HTMLCanvasElement): number[] {
   verticalLineXs.sort((a,b) => a-b);
   const mergedLines: number[] = [];
   for (const lx of verticalLineXs) {
-      if (mergedLines.length === 0 || lx - mergedLines[mergedLines.length-1] > 10) {
-          mergedLines.push(lx);
-      }
+    if (mergedLines.length === 0 || lx - mergedLines[mergedLines.length-1] > 30) {
+        mergedLines.push(lx);
+    }
   }
   return mergedLines;
 }
@@ -88,27 +100,31 @@ export const tablePipeline: OcrPipeline = {
       img.src = URL.createObjectURL(input.image);
     });
 
+    // --- UPGRADE UTAMA: UPSCALING 2.5x ---
+    const scale = 2.5;
     const canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
+    canvas.width = image.width * scale;
+    canvas.height = image.height * scale;
+    
     const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(image, 0, 0);
+    // Gambar ulang gambar asli ke resolusi yang lebih besar
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-    const verticalLines = removeLinesFromCanvas(canvas);
+    // Proses hapus garis dan binarization
+    const verticalLines = preprocessAndRemoveLines(canvas);
     onProgress(30);
 
     const worker = await createWorker(input.lang, 1, {
       langPath: 'https://tessdata.projectnaptha.com/4.0.0',
     });
 
-    // UPGRADE 2: Matikan kamus (dawg) dan set whitelist
     await worker.setParameters({
       tessedit_pageseg_mode: '6', 
       preserve_interword_spaces: '1',
-      load_system_dawg: '0',   // Matikan kamus bahasa
-      load_freq_dawg: '0',     // Matikan frekuensi kata
-      // Hanya izinkan Huruf Kapital, Angka, dan beberapa simbol umum
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,$ ' 
+      load_system_dawg: '0',   
+      load_freq_dawg: '0',     
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/.,$% ' 
     });
 
     const cleanedBlob = await new Promise<Blob>((resolve) => {
@@ -141,19 +157,19 @@ export const tablePipeline: OcrPipeline = {
 
     const sortedWords = allWords.sort((a, b) => {
       const yDiff = a.bbox.y0 - b.bbox.y0;
-      if (Math.abs(yDiff) > 15) return yDiff; 
+      if (Math.abs(yDiff) > 35) return yDiff; // Toleransi Y diperbesar karena gambar 2.5x lebih besar
       return a.bbox.x0 - b.bbox.x0;
     });
 
     let rows: string[][] = [];
 
     if (verticalLines.length >= 2) {
-        const colBounds = [0, ...verticalLines, image.width];
+        const colBounds = [0, ...verticalLines, canvas.width];
         let currentRow: string[] = new Array(colBounds.length - 1).fill("");
         let currentY = -1;
 
         for (const word of sortedWords) {
-            if (currentY === -1 || Math.abs(word.bbox.y0 - currentY) > 15) {
+            if (currentY === -1 || Math.abs(word.bbox.y0 - currentY) > 35) {
                 if (currentY !== -1) rows.push(currentRow);
                 currentRow = new Array(colBounds.length - 1).fill("");
                 currentY = word.bbox.y0;
@@ -163,7 +179,7 @@ export const tablePipeline: OcrPipeline = {
             let assigned = false;
             
             for (let i = 0; i < colBounds.length - 1; i++) {
-                if (cx >= colBounds[i] - 10 && cx <= colBounds[i+1] + 10) {
+                if (cx >= colBounds[i] - 30 && cx <= colBounds[i+1] + 30) {
                     currentRow[i] += (currentRow[i] ? " " : "") + word.text;
                     assigned = true;
                     break;
@@ -175,12 +191,11 @@ export const tablePipeline: OcrPipeline = {
         }
         if (currentY !== -1) rows.push(currentRow);
     } else {
-        // Fallback
         let currentRow: { text: string, x0: number, x1: number }[] = [];
         let currentY = -1;
 
         for (const word of sortedWords) {
-          if (currentY === -1 || Math.abs(word.bbox.y0 - currentY) > 15) {
+          if (currentY === -1 || Math.abs(word.bbox.y0 - currentY) > 35) {
             if (currentRow.length > 0) rows.push(mergeRowIntoColumns(currentRow));
             currentRow = [{ text: word.text, x0: word.bbox.x0, x1: word.bbox.x1 }];
             currentY = word.bbox.y0;
@@ -210,7 +225,10 @@ function mergeRowIntoColumns(wordsInRow: { text: string, x0: number, x1: number 
     if (prevX1 === -1) currentCell = w.text;
     else {
       const gap = w.x0 - prevX1;
-      if (gap > 40) { columns.push(currentCell.trim()); currentCell = w.text; }
+      if (gap > 100) { // Jarak gap disesuaikan karena gambar diperbesar 2.5x
+        columns.push(currentCell.trim()); 
+        currentCell = w.text; 
+      }
       else currentCell += " " + w.text;
     }
     prevX1 = w.x1;
